@@ -54,30 +54,12 @@ This decoupling allows property control to be added or modified without retraini
 
 We recommend Linux with CUDA-enabled PyTorch.
 
-### Option A: Install with `requirements.txt`
+### Install with `requirements.txt`
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Option B: Conda export (recommended for submission reproducibility)
-
-If you use conda, also provide:
-
-```bash
-conda env export --no-builds > environment.yml
-```
-
-### Notes on PyTorch / CUDA
-
-PyTorch wheels are CUDA-version dependent. For stable reproduction, we recommend recording:
-- PyTorch version
-- CUDA runtime version
-- GPU model and driver version
-
-If you provide an `environment.yml`, it is often easier for reviewers to reproduce.
-
----
 
 ## Data preparation
 
