@@ -1,58 +1,130 @@
-# Two-Stage Conditional Guidance for Structure-Based Molecule Generation (MolPilot-based)
+# SBDD-CGBFN: Conditional Guidance for Bayesian Flow Networks in Structure-Based Drug Design
 
-This repository provides the research code for a **two-stage conditional guidance** pipeline for structure-based drug design (SBDD), built on top of **MolPilot** (a Bayesian Flow Network–based SBDD framework). The pipeline targets **property-controlled generation** (e.g., **QED** and **SA**) while maintaining 3D pocket–ligand consistency.
+This repository provides the reference implementation for our manuscript on **structure-based drug design (SBDD)** using a **Bayesian Flow Network (BFN)** backbone and a **geometry-aware conditional guidance** module for property control.
 
-The implementation used for the three-stage workflow described below lives in `SBDD-CGBFN/`.
+Our objective is to generate **3D ligands conditioned on protein pockets** while enabling controllable alignment to target molecular properties such as **QED** and **SA**, without sacrificing docking and geometric fidelity.
 
-## Method Overview (Four Stages)
+---
 
-1. **Condition-aware backbone training**: train a BFN backbone with conditioning signals (QED/SA) injected during training.
-2. **Guidance dataset generation**: sample intermediate states from the backbone and compute target properties to build a supervised dataset.
-3. **Geometric guidance network training**: train a geometry-aware network to predict the conditional distribution of target properties given intermediate states.
-4. **Joint inference (guided sampling)**: run backbone sampling with the trained guidance model (gradient guidance) to steer generation toward target properties.
+## Highlights
 
-## Environment
+- Pocket-conditioned **BFN backbone** for 3D ligand generation  
+- **Two-stage** training design: structural backbone and property guider are decoupled  
+- Sampling-time **likelihood-based correction** for controllable property alignment  
+- Evaluation on **CrossDock (ID)** and **PoseBusters (OOD)** protocols
 
-We recommend using the environment provided by MolPilot:
-- Docker setup: `MolPilot/docker/README.md`
-- Dependency list: `MolPilot/docker/asset/requirements.txt`
+---
 
-## Data
+## Method overview
 
-Experiments are configured for **CrossDocked v1.1 (pocket10)**. MolPilot provides processed artifacts (LMDB + split file) and detailed preprocessing instructions in `MolPilot/README.md`.
+Our framework follows a **two-stage design** that improves modularity and reproducibility:
 
-Expected paths (relative to `MolPilot/`):
-- Processed LMDB: `data/crossdocked_v1.1_rmsd1.0_pocket10_processed_kekulize.lmdb`
-- Split file: `data/crossdocked_pose_split_kekulize.pt`
-- (Optional, docking evaluation) Test set proteins: `data/test_set/`
+- **Stage I: Pocket-conditioned BFN backbone**  
+  Train a pocket-conditioned BFN generator to model ligand atom types and 3D coordinates under receptor constraints.  
+  The backbone focuses on structural generation and does not require explicit property supervision in the default setting.
 
-## Reproducing the Four Stages
+- **Stage II: Geometry-aware guidance network**  
+  Construct a supervision dataset from intermediate noisy states and pocket context, then train a lightweight guidance model to predict property distributions from these intermediate states.
 
-Run from `MolPilot/`:
+- **Inference: Conditional sampling with likelihood-based correction**  
+  During reverse sampling, apply guidance derived from the learned property likelihood to steer intermediate states toward the target condition vector, while keeping the backbone unchanged.
+
+This decoupling allows property control to be added or modified without retraining the backbone.
+
+---
+
+## Repository structure
+
+- `train_bfn_twisted.py`  
+  Backbone training and sampling entry point.
+- `generate_condition_guidance_dataset.py`  
+  Generates intermediate-state supervision for guidance training.
+- `train_geometric_guidance_network.py`  
+  Trains the geometry-aware guidance network.
+- `configs/`  
+  Experiment configurations for CrossDock (ID) and PoseBusters (OOD).
+- `data/`  
+  Expected location for processed datasets (paths configurable).
+- `utils/`, `core/`, `models/`  
+  Common modules used by training and inference.
+
+---
+
+## Environment setup
+
+We recommend Linux with CUDA-enabled PyTorch.
+
+### Option A: Install with `requirements.txt`
 
 ```bash
-cd MolPilot
+pip install -r requirements.txt
 ```
 
-### Stage 1: Condition-aware backbone training
+### Option B: Conda export (recommended for submission reproducibility)
+
+If you use conda, also provide:
+
+```bash
+conda env export --no-builds > environment.yml
+```
+
+### Notes on PyTorch / CUDA
+
+PyTorch wheels are CUDA-version dependent. For stable reproduction, we recommend recording:
+- PyTorch version
+- CUDA runtime version
+- GPU model and driver version
+
+If you provide an `environment.yml`, it is often easier for reviewers to reproduce.
+
+---
+
+## Data preparation
+
+### CrossDock (in-distribution)
+
+Expected inputs (relative paths can be adjusted in configs):
+
+- Processed LMDB  
+  `data/crossdocked_v1.1_rmsd1.0_pocket10_processed_kekulize.lmdb`
+- Split file  
+  `data/crossdocked_pose_split_kekulize.pt`
+- (Optional, for docking evaluation) test receptors  
+  `data/test_set/`
+
+### PoseBusters (out-of-distribution)
+
+For OOD evaluation, we use a filtered PoseBusters benchmark set where complexes are removed if any receptor chain has >30% sequence identity to any chain in CrossDock training (MMseqs2-based filtering). The resulting subset is used only for evaluation.
+
+> Please obtain datasets from their official sources and comply with their licenses.
+
+---
+
+## Reproducing the pipeline
+
+All commands below assume you are in the repository root.
+
+### Stage I: Train the BFN backbone (default, no property supervision)
 
 ```bash
 python train_bfn_twisted.py \
   --config_file configs/crossdock_train_test_condition_aware.yaml \
   --sigma1_coord 0.05 --beta1 1.5 --beta1_bond 1.5 \
-  --lr 5e-4 --time_emb_dim 1 --self_condition \
-  --epochs 30 --batch_size 16 --max_grad_norm Q --scheduler plateau \
+  --lr 5e-4 --self_condition \
+  --epochs 30 --batch_size 16 \
   --destination_prediction True --use_discrete_t True \
   --num_samples 10 --sampling_strategy end_back_pmf --sample_num_atoms ref \
   --ligand_atom_mode add_aromatic \
-  --condition_aware --condition_dim 2 --condition_use_prob 1 --condition_noise_std 0.00 \
-  --target_qed 0.56 --target_sa 0.78 \
   --gpu_device 0
 ```
 
-Outputs (default): `MolPilot/outputs/condition_aware_integration/v1/`
+Outputs are saved under `outputs/` (the log prints the run directory).
 
-### Stage 2: Guidance dataset generation and Geometric guidance network training
+---
+
+### Stage II: Build guidance dataset and train the guidance network
+
+#### (1) Generate guidance dataset
 
 ```bash
 python generate_condition_guidance_dataset.py \
@@ -60,7 +132,11 @@ python generate_condition_guidance_dataset.py \
   --output_dir data/condition_guidance_dataset
 ```
 
-Outputs: `data/condition_guidance_dataset/{train,val,test}_condition_data.pkl` and `data/condition_guidance_dataset/dataset_statistics.pkl`
+Outputs:
+- `data/condition_guidance_dataset/{train,val,test}_condition_data.pkl`
+- `data/condition_guidance_dataset/dataset_statistics.pkl`
+
+#### (2) Train the geometry-aware guidance network
 
 ```bash
 python train_geometric_guidance_network.py \
@@ -71,9 +147,12 @@ python train_geometric_guidance_network.py \
   --epochs 20 --batch_size 16 --lr 1e-4
 ```
 
-Outputs: `models/geometric_guidance/geometric_guidance_best.pt`
+Output:
+- `models/geometric_guidance/geometric_guidance_best.pt`
 
-### Stage 3: Joint inference (guided sampling)
+---
+
+### Inference: Conditional sampling with guidance
 
 ```bash
 python train_bfn_twisted.py \
@@ -81,29 +160,63 @@ python train_bfn_twisted.py \
   --ckpt_path <PATH_TO_BACKBONE_CKPT> \
   --test_only --exp_name guided_sampling --revision v1 \
   --eval_batch_size 16 \
-  --condition_aware --guidance_scale 2.5 \
-  --target_qed 0.60 --target_sa 0.78 \
   --guidance_model_path models/geometric_guidance/geometric_guidance_best.pt \
+  --guidance_scale 2.5 \
+  --target_qed 0.60 --target_sa 0.78 \
   --use_gradient_guidance \
   --gpu_device 0
 ```
 
-## Key Implementation Files
+Notes:
+- `--guidance_scale` controls the strength of the likelihood correction.
+- The guidance implementation uses a gradient-based form for likelihood correction during sampling. The manuscript provides the probabilistic formulation and its implementation rationale.
 
-Entry points:
-- `MolPilot/train_bfn_twisted.py` (stage 1 & 3)
-- `MolPilot/generate_condition_guidance_dataset.py` (stage 2)
-- `MolPilot/train_geometric_guidance_network.py` (stage 2)
+---
 
-Main configuration:
-- `MolPilot/configs/crossdock_train_test_condition_aware.yaml`
+## Optional: condition-aware backbone (ablation)
 
-## Acknowledgements
+The default manuscript setting does not require injecting property targets during backbone training.  
+If you want to run an ablation where property targets are provided during Stage I, enable:
 
-This project is built upon **MolPilot** (ICML 2025) and its ecosystem (including TargetDiff preprocessing conventions). Please cite the original MolPilot paper when using this codebase.
+```bash
+--condition_aware --condition_dim 2 --condition_use_prob 1 --condition_noise_std 0.00 \
+--target_qed <...> --target_sa <...>
+```
+
+We recommend keeping this option disabled for the main results to match the two-stage decoupled setting.
+
+---
+
+## Reproducibility checklist
+
+- Fix random seeds and log them per run.
+- Save the config file and command line arguments for each experiment.
+- Do not use PoseBusters OOD data for training or guidance dataset construction.
+- Record docking tool versions and receptor preparation protocols when reporting docking metrics.
+
+---
 
 ## License
 
 See `LICENSE`.
 
-# SBDD-CGBFN
+---
+
+## Acknowledgements
+
+This codebase follows conventions from the MolPilot and TargetDiff ecosystems for structure-based data processing and evaluation. We thank the original authors for their open-source contributions.
+
+---
+
+## Citation
+
+If you use this code, please cite our manuscript:
+
+```bibtex
+@article{wang2025sbddcgbfn,
+  title   = {Conditional Guidance for Bayesian Flow Networks in Structure-Based Drug Design},
+  author  = {Wang, Zilin and Liu, Xianggen and Ke, Bowen and Lv, Jiancheng},
+  year    = {2025},
+  note    = {Manuscript under review}
+}
+```
