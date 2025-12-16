@@ -62,7 +62,9 @@ pip install -r requirements.txt
 
 
 ## Data preparation
-
+The CrossDocked2020 dataset is publicly available at \url{https://bits.csb.pitt.edu/files/crossdock2020/}. 
+The PoseBusters benchmark set is publicly available at \url{https://github.com/maabuu/posebusters}. 
+All data used in this study were obtained from these resources and processed as described in the Methods.
 ### CrossDock (in-distribution)
 
 Expected inputs (relative paths can be adjusted in configs):
